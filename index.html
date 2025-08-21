@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Haunted Escape — by Adinova</title>
+<style>
+  :root{
+    --bg:#07060a; --panel:#0f1720; --muted:#9ca3af; --accent:#eab308;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:linear-gradient(180deg,#020206,#0b0b12);color:#eee;font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;display:flex;flex-direction:column;align-items:center;min-height:100vh}
+  header{width:100%;max-width:980px;padding:18px 16px;display:flex;justify-content:space-between;align-items:center}
+  h1{margin:0;font-size:18px;letter-spacing:1px}
+  .subtitle{font-size:12px;color:var(--muted)}
+  .stage{width:100%;max-width:980px;padding:12px}
+  .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(0,0,0,0.12));border:1px solid rgba(255,255,255,0.04);border-radius:12px;padding:12px;margin-bottom:12px}
+  .row{display:flex;gap:8px;align-items:center}
+  #gameWrap{position:relative}
+  canvas{display:block;border-radius:10px;background:#071025;box-shadow:0 8px 30px rgba(0,0,0,.6);width:100%;height:calc(100vw * 0.56);max-height:560px}
+  .hud{position:absolute;left:12px;top:12px;color:#fff;pointer-events:none}
+  .hud .pill{background:rgba(0,0,0,0.45);padding:6px 8px;border-radius:999px;margin-bottom:6px;font-size:13px;border:1px solid rgba(255,255,255,0.04)}
+  #msg{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:20px;color:#fff;padding:10px 16px;border-radius:8px;display:none;background:rgba(3,7,18,0.7);border:1px solid rgba(255,255,255,0.06)}
+  .controls{display:flex;gap:8px;flex-wrap:wrap}
+  button, select{background:#0b1220;color:#fff;border:1px solid rgba(255,255,255,0.06);padding:8px 10px;border-radius:8px;font-weight:600}
+  .footer{font-size:12px;color:var(--muted);margin:12px}
+  /* virtual joystick on mobile (simple) */
+  #joy{position:absolute;right:12px;bottom:12px;width:110px;height:110px;border-radius:999px;background:rgba(255,255,255,0.03);display:none;align-items:center;justify-content:center}
+  #joyDot{width:36px;height:36px;border-radius:999px;background:rgba(255,255,255,0.08)}
+  @media(max-width:700px){ canvas{height:60vh} #joy{display:flex} }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Haunted Escape <span class="subtitle">— by Adinova</span></h1>
+  </div>
+  <div class="row">
+    <label style="color:var(--muted);font-size:13px">Difficulty</label>
+    <select id="difficulty">
+      <option value="easy">Easy</option>
+      <option value="normal" selected>Normal</option>
+      <option value="hard">Hard</option>
+    </select>
+    <button id="startBtn">Start</button>
+    <button id="restartBtn" style="display:none">Restart</button>
+  </div>
+</header>
+
+<section class="stage">
+  <div class="card" id="gameWrap">
+    <div id="msg"></div>
+    <div class="hud" id="hudLeft">
+      <div class="pill" id="scorePill">Score: 0</div>
+      <div class="pill" id="hpPill">HP: 100</div>
+      <div class="pill" id="statusPill">Find the key</div>
+    </div>
+
+    <canvas id="c" width="960" height="540"></canvas>
+
+    <div id="joy"><div id="joyDot"></div></div>
+  </div>
+</section>
+
+<div class="footer">Tip: Gerak pakai WASD / Arrow. Di HP, pakai joystick. Kunci harus diambil sebelum keluar.</div>
+
+<script>
+/*
+  Haunted Escape — Single-file HTML game
+  - Save as game.html and open in browser
+  - Good base to wrap into APK (Cordova/Capacitor/WebView)
+*/
+
+/* ---------------------------
+   Embedded SVG sprites (data URIs)
+   small, crisp, scalable — no external files
+   --------------------------- */
+function svgDataURI(svgStr){ return 'data:image/svg+xml;utf8,' + encodeURIComponent(svgStr); }
+
+const SPRITES = {
+  player: svgDataURI(`<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64' viewBox='0 0 64 64'>
+    <circle cx='32' cy='20' r='10' fill='#FFD166' />
+    <rect x='14' y='32' width='36' height='18' rx='6' fill='#60A5FA' />
+    <rect x='26' y='44' width='12' height='6' rx='3' fill='#1E3A8A' />
+  </svg>`),
+  enemy: svgDataURI(`<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64' viewBox='0 0 64 64'>
+    <rect x='8' y='12' width='48' height='40' rx='8' fill='#EF4444'/>
+    <circle cx='22' cy='24' r='4' fill='#111827' />
+    <circle cx='42' cy='24' r='4' fill='#111827' />
+    <path d='M18 40 C26 48 38 48 46 40' fill='none' stroke='#111827' stroke-width='3' stroke-linecap='round'/>
+  </svg>`),
+  key: svgDataURI(`<svg xmlns='http://www.w3.org/2000/svg' width='48' height='32' viewBox='0 0 48 32'>
+    <circle cx='10' cy='16' r='8' fill='#FBBF24'/>
+    <rect x='16' y='12' width='20' height='6' rx='2' fill='#FCD34D'/>
+    <rect x='34' y='10' width='2' height='6' fill='#FCD34D'/>
+  </svg>`),
+  door: svgDataURI(`<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64' viewBox='0 0 64 64'>
+    <rect x='12' y='6' width='40' height='52' rx='4' fill='#7C3AED' />
+    <circle cx='44' cy='34' r='2.5' fill='#FDE68A'/>
+  </svg>`)
+};
+
+/* ---------------------------
+   Sound — tiny beeps via WebAudio
+   --------------------------- */
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+let audioCtx = null;
+function ensureAudio(){ if(!audioCtx) audioCtx = new AudioCtx(); }
+
+function beep(freq=440, duration=0.12, vol=0.05){
+  try {
+    ensureAudio();
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = 'sine';
+    o.frequency.value = freq;
+    g.gain.value = vol;
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start();
+    o.stop(audioCtx.currentTime + duration);
+  } catch(e){}
+}
+
+/* ---------------------------
+   Core game variables
+   --------------------------- */
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const startBtn = document.getElementById('startBtn');
+const restartBtn = document.getElementById('restartBtn');
+const difficultySel = document.getElementById('difficulty');
+const msgEl = document.getElementById('msg');
+const scorePill = document.getElementById('scorePill');
+const hpPill = document.getElementById('hpPill');
+const statusPill = document.getElementById('statusPill');
+const joy = document.getElementById('joy');
+const joyDot = document.getElementById('joyDot');
+
+let W = canvas.width, H = canvas.height;
+
+function resizeCanvasToDisplay() {
+  // keep internal resolution fixed but display responsive (handled by CSS)
+  W = canvas.width; H = canvas.height;
+}
+resizeCanvasToDisplay();
+
+/* Game state */
+let playerImg = new Image(), enemyImg=new Image(), keyImg=new Image(), doorImg=new Image();
+playerImg.src = SPRITES.player; enemyImg.src = SPRITES.enemy; keyImg.src = SPRITES.key; doorImg.src = SPRITES.door;
+
+let state = {
+  running:false,
+  score:0,
+  player: null,
+  enemies: [],
+  map: null,
+  key: null,
+  door: null,
+  foundKey:false,
+  paused:false,
+  difficulty:'normal'
+};
+
+/* Map definition: simple rooms & walls (grid) */
+const TILE = 32;
+const MAP_COLS = Math.floor(W / TILE);
+const MAP_ROWS = Math.floor(H / TILE);
+
+/* Utility */
+const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
+const rand = (a,b)=>Math.random()*(b-a)+a;
+const dist = (a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+
+/* ---------------------------
+   Create map - simple empty room with some obstacles
+   --------------------------- */
+function generateMap(){
+  // We'll store rectangles for walls (x,y,w,h)
+  const walls = [];
+  // Add outer walls (invisible, used for collision)
+  walls.push({x:0,y:0,w:W,h:8});
+  walls.push({x:0,y:H-8,w:W,h:8});
+  walls.push({x:0,y:0,w:8,h:H});
+  walls.push({x:W-8,y:0,w:8,h:H});
+  // Add a few internal walls to create corridors
+  walls.push({x:160,y:60,w:16,h:200});
+  walls.push({x:380,y:300,w:300,h:16});
+  walls.push({x:540,y:90,w:16,h:220});
+  // Return walls array
+  return walls;
+}
+
+/* ---------------------------
+   Initialize / Reset Game
+   --------------------------- */
+function initGame(){
+  state.running = false;
+  state.score = 0;
+  state.foundKey = false;
+  state.paused = false;
+  state.difficulty = difficultySel.value;
+  // Set difficulty params
+  let enemyCount = 1, enemySpeed = 0.8, enemyDetect = 140;
+  if(state.difficulty === 'easy'){ enemyCount=1; enemySpeed=0.6; enemyDetect=160; }
+  if(state.difficulty === 'normal'){ enemyCount=2; enemySpeed=0.9; enemyDetect=140; }
+  if(state.difficulty === 'hard'){ enemyCount=3; enemySpeed=1.4; enemyDetect=120; }
+
+  state.map = generateMap();
+
+  // Player spawn
+  state.player = { x:80, y:H/2, r:18, speed:2.6, hp:100, img:playerImg };
+
+  // Enemies spawn (patrol points)
+  state.enemies = [];
+  for(let i=0;i<enemyCount;i++){
+    const ex = rand(W*0.6, W-80), ey = rand(80, H-80);
+    state.enemies.push({
+      x:ex, y:ey, r:20, speed:enemySpeed, img:enemyImg,
+      mode:'patrol', // or 'chase'
+      patrolPoints: generatePatrolPoints(ex,ey),
+      targetIndex: 0,
+      detectRange: enemyDetect
+    });
+  }
+
+  // Key and door placement
+  state.key = { x: rand(120, W-200), y: rand(80, H-120), size:22, img:keyImg, picked:false };
+  state.door = { x: W-64, y: 12 + 8, w:48, h:64, img:doorImg }; // top-right door
+  updateHUD();
+  showMessage("Tekan Start untuk mulai", 2500);
+}
+
+/* generate simple patrol points around spawn */
+function generatePatrolPoints(x,y){
+  const pts = [];
+  for(let i=0;i<3;i++){
+    pts.push({ x: clamp(x + rand(-120,120), 60, W-60), y: clamp(y + rand(-80,80), 60, H-60) });
+  }
+  return pts;
+}
+
+/* ---------------------------
+   Input handling (keyboard)
+   --------------------------- */
+const keys = {};
+window.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; if(e.key === ' '){ e.preventDefault(); } });
+window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+/* Virtual joystick (touch) */
+let joyActive = false, joyStart = null, joyVec = {x:0,y:0};
+const joyElem = document.getElementById('joy');
+if('ontouchstart' in window){
+  joyElem.style.display = 'flex';
+  joyElem.addEventListener('touchstart', e=>{ joyActive = true; joyStart = e.touches[0]; }, {passive:true});
+  joyElem.addEventListener('touchmove', e=> {
+    if(!joyActive) return;
+    const t = e.touches[0];
+    const dx = t.clientX - joyStart.clientX, dy = t.clientY - joyStart.clientY;
+    const max = 40; let mx = clamp(dx, -max, max), my = clamp(dy, -max, max);
+    joyDot.style.transform = `translate(${mx}px, ${my}px)`;
+    joyVec.x = mx / max; joyVec.y = my / max;
+  }, {passive:true});
+  joyElem.addEventListener('touchend', e=>{ joyActive=false; joyDot.style.transform='translate(0,0)'; joyVec={x:0,y:0};});
+}
+
+/* ---------------------------
+   Game loop: update & draw
+   --------------------------- */
+let lastTime = 0;
+function gameLoop(ts){
+  if(!state.running){ lastTime = ts; requestAnimationFrame(gameLoop); return; }
+  const dt = Math.min(40, ts - lastTime); lastTime = ts;
+  if(!state.paused) update(dt/16);
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+/* Update logic */
+function update(delta){
+  // player movement
+  let mvx = 0, mvy = 0;
+  if(keys['w'] || keys['arrowup']) mvy -= 1;
+  if(keys['s'] || keys['arrowdown']) mvy += 1;
+  if(keys['a'] || keys['arrowleft']) mvx -= 1;
+  if(keys['d'] || keys['arrowright']) mvx += 1;
+  // add joystick
+  mvx += joyVec.x;
+  mvy += joyVec.y;
+  const len = Math.hypot(mvx, mvy) || 1;
+  state.player.x = clamp(state.player.x + (mvx/len) * state.player.speed * 2, 20, W-20);
+  state.player.y = clamp(state.player.y + (mvy/len) * state.player.speed * 2, 20, H-20);
+
+  // enemy AI
+  for(const e of state.enemies){
+    const d = Math.hypot(state.player.x - e.x, state.player.y - e.y);
+    // switch to chase when within detection or when recently spotted
+    if(d < e.detectRange){
+      e.mode = 'chase';
+      // sound faint beep when detected (rare)
+      if(Math.random() < 0.002) beep(220, 0.06, 0.02);
+    }
+    if(e.mode === 'chase'){
+      // move towards player
+      const ang = Math.atan2(state.player.y - e.y, state.player.x - e.x);
+      e.x += Math.cos(ang) * e.speed * 2;
+      e.y += Math.sin(ang) * e.speed * 2;
+    } else {
+      // patrol: move to current patrol point
+      const tp = e.patrolPoints[e.targetIndex];
+      const d2 = Math.hypot(tp.x - e.x, tp.y - e.y);
+      if(d2 < 8) e.targetIndex = (e.targetIndex + 1) % e.patrolPoints.length;
+      const ang = Math.atan2(tp.y - e.y, tp.x - e.x);
+      e.x += Math.cos(ang) * e.speed;
+      e.y += Math.sin(ang) * e.speed;
+      // small chance to switch patrol point
+      if(Math.random() < 0.002) e.targetIndex = (e.targetIndex + 1) % e.patrolPoints.length;
+    }
+    // collision with player => caught
+    if(Math.hypot(state.player.x - e.x, state.player.y - e.y) < (state.player.r + e.r) * 0.8){
+      // caught: game over
+      state.running = false;
+      showMessage("Ketahuan! Granny menang 😱", 4000);
+      beep(120, 0.35, 0.12);
+      document.getElementById('restartBtn').style.display = 'inline-block';
+    }
+  }
+
+  // pickup key
+  if(!state.key.picked && Math.hypot(state.player.x - state.key.x, state.player.y - state.key.y) < 28){
+    state.key.picked = true;
+    state.foundKey = true;
+    state.score += 100;
+    updateHUD();
+    beep(880, 0.12, 0.06);
+    showMessage("🔑 Kunci ditemukan! Menuju pintu keluar.", 2500);
+  }
+
+  // reach door (only if have key)
+  if(state.key.picked && state.player.x > state.door.x - 12 && state.player.x < state.door.x + state.door.w + 12
+    && state.player.y > state.door.y - 12 && state.player.y < state.door.y + state.door.h + 12){
+    // win
+    state.running = false;
+    state.score += 500;
+    updateHUD();
+    showMessage("🎉 Kamu berhasil kabur! Selamat!", 5000);
+    beep(1200, 0.22, 0.08);
+    document.getElementById('restartBtn').style.display = 'inline-block';
+  }
+}
+
+/* Draw everything */
+function draw(){
+  // clear
+  ctx.clearRect(0,0,W,H);
+
+  // background (subtle grid)
+  ctx.fillStyle = "#081226";
+  ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle = "rgba(255,255,255,0.02)";
+  for(let x=0;x<W;x+=32){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+  for(let y=0;y<H;y+=32){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+
+  // draw walls (as dark rectangles)
+  ctx.fillStyle = "#071022";
+  for(const w of state.map){
+    ctx.fillRect(w.x, w.y, w.w, w.h);
+    // inner shadow
+    ctx.strokeStyle = "rgba(0,0,0,0.25)";
+    ctx.strokeRect(w.x, w.y, w.w, w.h);
+  }
+
+  // draw door
+  ctx.drawImage(state.door.img, state.door.x, state.door.y, state.door.w, state.door.h);
+  // highlight door if key found
+  if(state.key.picked){
+    ctx.save();
+    ctx.globalAlpha = 0.18;
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(state.door.x-6, state.door.y-6, state.door.w+12, state.door.h+12);
+    ctx.restore();
+  }
+
+  // draw key if not picked
+  if(!state.key.picked){
+    ctx.drawImage(state.key.img, state.key.x - state.key.size/2, state.key.y - state.key.size/2, state.key.size, state.key.size);
+  } else {
+    // optional floating key on HUD
+  }
+
+  // draw enemies (with small shadow)
+  for(const e of state.enemies){
+    ctx.save();
+    // shadow
+    ctx.fillStyle = "rgba(0,0,0,0.3)";
+    ctx.beginPath();
+    ctx.ellipse(e.x, e.y + e.r * 0.5, e.r*0.9, e.r*0.4, 0, 0, Math.PI*2);
+    ctx.fill();
+    // enemy sprite
+    ctx.drawImage(e.img, e.x - e.r, e.y - e.r, e.r*2, e.r*2);
+    ctx.restore();
+  }
+
+  // draw player
+  ctx.save();
+  ctx.drawImage(state.player.img, state.player.x - state.player.r, state.player.y - state.player.r, state.player.r*2, state.player.r*2);
+  ctx.restore();
+
+  // optional debug: detection circle
+  // ctx.strokeStyle = "rgba(255,0,0,0.08)"; ctx.beginPath(); ctx.arc(state.enemies[0].x, state.enemies[0].y, state.enemies[0].detectRange, 0, Math.PI*2); ctx.stroke();
+}
+
+/* ---------------------------
+   UI Helpers
+   --------------------------- */
+function updateHUD(){
+  scorePill.textContent = 'Score: ' + Math.floor(state.score);
+  hpPill.textContent = 'HP: ' + Math.floor(state.player.hp || 100);
+  statusPill.textContent = state.key.picked ? 'Kunci: Ditemukan' : 'Cari kunci';
+}
+
+let msgTimer = null;
+function showMessage(txt, ms=2000){
+  msgEl.style.display = 'block'; msgEl.textContent = txt;
+  if(msgTimer) clearTimeout(msgTimer);
+  if(ms>0) msgTimer = setTimeout(()=>{ msgEl.style.display='none'; }, ms);
+}
+
+/* ---------------------------
+   Buttons
+   --------------------------- */
+startBtn.addEventListener('click', ()=>{
+  initGame(); state.running = true; startBtn.style.display='none'; restartBtn.style.display='none';
+  requestAnimationFrame(gameLoop);
+});
+restartBtn.addEventListener('click', ()=>{
+  initGame(); state.running = true; restartBtn.style.display='none';
+});
+
+/* init on load */
+initGame();
+requestAnimationFrame(gameLoop);
+
+/* make canvas responsive (CSS handles display) */
+window.addEventListener('resize', ()=>{ resizeCanvasToDisplay(); });
+
+/* Touch: allow clicking the canvas to make small dodge jump (optional) */
+canvas.addEventListener('click', ()=>{ if(!state.running) return; /* could add action */ });
+
+/* prevent context menu on long touch */
+canvas.addEventListener('contextmenu', e=>e.preventDefault());
+
+/* Accessibility: allow pause with P */
+window.addEventListener('keydown', e => {
+  if(e.key.toLowerCase() === 'p'){ state.paused = !state.paused; showMessage(state.paused ? 'Jeda' : 'Lanjut', 1000); }
+});
+
+/* initial tiny beep to indicate ready (will be blocked until user interacts on some browsers) */
+window.addEventListener('click', ()=>{ beep(660,0.04,0.02); }, {once:true});
+</script>
+</body>
+</html>
